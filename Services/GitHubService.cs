@@ -7,18 +7,15 @@ namespace GitHubPRAssistant.Services
 {
     public class GitHubService
     {
-        private readonly GitHubClient _client;
+        private readonly IGitHubClient _client;
         private readonly ILogger<GitHubService> _logger;
         private readonly string _token;
 
-        public GitHubService(IConfiguration config, ILogger<GitHubService> logger)
+        public GitHubService(IConfiguration config, ILogger<GitHubService> logger, IGitHubClient client)
         {
             _logger = logger;
             _token = config["GitHub:Token"] ?? throw new ArgumentNullException("GitHubToken is not configured");
-            _client = new GitHubClient(new ProductHeaderValue("GitHubPRAssistant"))
-            {
-                Credentials = new Credentials(_token)
-            };
+            _client = client;
         }
         public async Task<PRContext> ParsePrWebHookAsync(JsonElement payload)
         {

@@ -10,17 +10,21 @@ public class PrReviewAgent
     private readonly LlmService _llmService;
     private readonly GitHubService _githubService;
     private readonly ILogger<PrReviewAgent> _logger;
+    private readonly AutomatedActionsService _automatedActionsService;
 
     public PrReviewAgent(
         CodeScannerTool scanner,
         LlmService llmService,
         GitHubService githubService,
-        ILogger<PrReviewAgent> logger)
+        ILogger<PrReviewAgent> logger,
+        AutomatedActionsService automatedActionsService
+        )
     {
         _scanner = scanner;
         _llmService = llmService;
         _githubService = githubService;
         _logger = logger;
+        _automatedActionsService = automatedActionsService;
     }
 
     public async Task<AgentResult> RunReviewAsync(PRContext prContext)
@@ -69,6 +73,38 @@ public class PrReviewAgent
 
             _logger.LogInformation("PR review completed: {IssueCount} issues, Critical: {HasCritical}",
                 issues.Count, result.HasCriticalIssues);
+
+            // Check for auto-approval
+            var (shouldApprove, approvalReason) = await _automatedActionsService.EvaluateAutoApprovalAsync(
+                prContext,
+                result
+            );
+
+            if (shouldApprove)
+            {
+                await _automatedActionsService.ApprovePrAsync(prContext, approvalReason);
+            }
+            else if (result.HasCriticalIssues)
+            {
+                // Request changes for critical issues
+                var criticalIssues = result.Issues
+                    .Where(i => i.Contains("⚠️"))
+                    .ToList();
+
+                await _automatedActionsService.RequestChangesAsync(prContext, criticalIssues);
+            }
+            else
+            {
+                // Try to auto-fix minor issues
+                var fixableIssues = result.Issues
+                    .Where(i => i.Contains("console.log") || i.Contains("formatting"))
+                    .ToList();
+
+                if (fixableIssues.Any())
+                {
+                    await _automatedActionsService.AutoFixIssuesAsync(prContext, fixableIssues);
+                }
+            }
 
             return result;
         }
