@@ -3,7 +3,7 @@ using LibGit2Sharp;
 using Octokit;
 using Polly;
 using System.Net;
-
+//Code for auto approval for PRs based on criteria
 namespace GitHubPRAssistant.Services
 {
     public class AutomatedActionsService
