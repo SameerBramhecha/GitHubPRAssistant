@@ -1,97 +1,76 @@
-﻿# GitHub PR Assistant
+﻿Below is a **beautified, polished, and professional README.md** version of your content — with better formatting, icons, spacing, and clarity.
 
-🤖 AI GitHub Pull Request Assistant
-An intelligent ASP.NET Core agent service that automatically reviews GitHub Pull Requests using LLM-powered analysis and deterministic code scanning.
-✨ Features
+---
 
-🔍 Automated PR Analysis - Summarizes changes and identifies patterns
-🛡️ Security Scanning - Detects hardcoded secrets, credentials, and IPs
-📊 Code Quality Checks - Finds TODOs, debug statements, and code smells
-🎯 Smart Reviews - Generates actionable, constructive feedback
-🔗 GitHub Integration - Posts comments directly to PRs
+# 🤖 GitHub PR Assistant
 
-## 📋 Prerequisites
+An intelligent **AI-powered ASP.NET Core service** that automatically reviews GitHub Pull Requests using **LLM-driven analysis** and **deterministic code scanning**.
+It acts like your AI teammate — analyzing code changes, detecting issues, and giving structured PR feedback.
 
-- .NET 9 SDK
-- GitHub Account and Personal Access Token
-- OpenAI API Key
-- Visual Studio 2022 or compatible IDE
+---
+
+## ✨ Key Features
+
+| Capability                   | Description                                         |
+| ---------------------------- | --------------------------------------------------- |
+| 🔍 **Automated PR Analysis** | Understands code changes & developer intent         |
+| 🛡️ **Security Scanning**    | Detects secrets, sensitive values, and unsafe code  |
+| 🧹 **Code Quality Checks**   | Spots debug logs, TODOs, smells & anti-patterns     |
+| 🧠 **LLM Smart Reviews**     | Generates helpful, actionable pull-request comments |
+| 🔗 **GitHub Integration**    | Receives webhooks & comments directly on PRs        |
+
+---
+
+## 📦 Prerequisites
+
+* ✅ .NET 9 SDK
+* ✅ GitHub Account & Personal Access Token
+* ✅ OpenAI API Key
+* ✅ Visual Studio 2022 / VS Code
+
+---
 
 ## ⚙️ Configuration
 
-Create or update your `appsettings.json` with the following configurations:
+Add settings to `appsettings.json`:
+
 ```json
-{ 
-	"Logging": { 
-		"LogLevel": { 
-			"Default": "Information", 
-			"Microsoft.AspNetCore": "Warning", 
-			"GitHubPRAssistant": "Debug" 
-		} 
-	}, 
-	"AllowedHosts": "*",
-	"GitHub": { 
-		"Token": "your-github-pat", 
-		"WebhookSecret": "your-webhook-secret" 
-	}, 
-	"OpenAI": { 
-	"ApiKey": "your-openai-api-key", 
-	"Model": "gpt-4o-mini" 
-	} 
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "GitHubPRAssistant": "Debug"
+    }
+  },
+  "AllowedHosts": "*",
+  "GitHub": {
+    "Token": "your-github-pat",
+    "WebhookSecret": "your-webhook-secret"
+  },
+  "OpenAI": {
+    "ApiKey": "your-openai-api-key",
+    "Model": "gpt-4o-mini"
+  }
 }
 ```
 
+---
 
-## 🛠️ Project Structure
+## 🧠 Architecture Overview
 
 ### Core Services
 
-1. **LlmService (`Services/LlmService.cs`)**
-   - Handles communication with OpenAI's API
-   - Manages chat completions and response generation
-   - Supports customizable temperature and token limits
-   - Features:
-     - Generic text generation
-     - PR summarization
-     - Review comment generation
-   - Uses Microsoft AI Agents Framework for enhanced capabilities
+| Component            | Responsibilities                                   |
+| -------------------- | -------------------------------------------------- |
+| **LlmService**       | OpenAI integration, PR summary & comments          |
+| **GitHubService**    | Handles GitHub webhooks & PR data (via Octokit)    |
+| **PrSummarizerTool** | File insights, change stats, complexity estimation |
+| **CodeScannerTool**  | Code smells, debug logs, secret detection          |
+| **PRReviewAgent**    | Orchestrates analysis & composes final review      |
 
-2. **GitHubService**
-   - Manages GitHub API interactions
-   - Handles webhook events
-   - Retrieves PR information and diffs
-   - Integrates with Octokit for GitHub API communication
+### 🤖 Dependency Injection Setup
 
-### Tools
-
-1. **PrSummarizerTool (`Tools/PRSummarizerTool.cs`)**
-   - Generates comprehensive PR summaries
-   - Features:
-     - File categorization
-     - Change statistics
-     - Complexity analysis
-     - Review time estimation
-   - Supports multiple file types:
-     - Configuration files
-     - Documentation
-     - Test files
-     - Various programming languages
-
-2. **CodeScannerTool (`Tools/CodeScannerTool.cs`)**
-   - Performs static code analysis
-   - Detects potential issues and code smells
-   - Checks for:
-     - Debugger statements
-     - File size violations
-     - Long lines
-     - Empty catch blocks
-     - Synchronous operations
-     - JavaScript-specific patterns
-
-### Program Structure
-
-
-The application is built as an ASP.NET Core web application with the following components:
 ```csharp
 builder.Services.AddSingleton<GitHubService>();
 builder.Services.AddSingleton<CodeScannerTool>();
@@ -100,108 +79,89 @@ builder.Services.AddSingleton<PrSummarizerTool>();
 builder.Services.AddSingleton<PrReviewAgent>();
 ```
 
-### Agent Components
+---
 
-1. **PRReviewAgent**
-   - Coordinates the review process
-   - Manages the workflow between different tools
-   - Handles the integration of LLM responses
-   - Generates final review comments
+## 🔄 Workflow
 
-### Agent Workflow
+| Stage                     | What Happens                         |
+| ------------------------- | ------------------------------------ |
+| 📥 **Context Collection** | Fetch PR metadata & diff             |
+| 🧪 **Analysis**           | Static scanning + diff understanding |
+| 🧠 **LLM Review**         | AI transforms insights into feedback |
+| 📝 **Feedback Posting**   | Comments appear on PR automatically  |
 
-1. Context Collection
-   - Gathers PR metadata
-   - Collects changed files
-   - Prepares analysis context
+---
 
-2. Analysis Phase
-   - Runs code scanner
-   - Processes file changes
-   - Generates summaries
+## 📊 Analysis Features
 
-3. Review Generation
-   - Creates comprehensive review comments
-   - Formats feedback
-   - Adds metadata and statistics
+✔ File type classification
+✔ Added/deleted line stats
+✔ Complexity & effort estimation
+✔ PR intent summary
+✔ Review checklist
 
+**Supported file types:**
+→ Code files, configs, docs, tests, Docker/K8s files, CI configs
 
-## 📊 Features Detail
+---
 
-### PR Analysis Capabilities
+## 🚀 Getting Started
 
-- **File Categorization**
-- Configuration files (`.json`, `.config`, etc.)
-- Documentation (`.md`, `.txt`, etc.)
-- Test files
-- Programming language files
-- Docker and deployment files
-
-- **Statistics Generation**
-- Total files changed
-- Lines added/removed
-- File type breakdown
-- Change complexity estimation
-- Estimated review time
-
-### LLM Integration
-
-- **Summary Generation**
-- Concise bullet points
-- Focus on intent and impact
-- Changed files analysis
-
-- **Review Comments**
-- Structured feedback
-- Key findings
-- Actionable recommendations
-- Verification checklist
-
-
-## 🚀 Setup Instructions
-
-1. **Clone the Repository**
+### 1️. Clone Repo
 
 ```bash
-git clone <repository-url> cd github-pr-assistant
+git clone <repository-url>
+cd github-pr-assistant
 ```
 
-2. **Install Dependencies**
+### 2️. Restore Packages
 
 ```bash
 dotnet restore
 ```
 
-3. **Configure Secrets**
-   - Create a GitHub Personal Access Token
-   - Obtain an OpenAI API key
-   - Update `appsettings.json` or use User Secrets
+### 3️. Configure Secrets
 
-4. **Build and Run**
+Edit `appsettings.json` or use user secrets.
+
+### 4️. Run App
 
 ```bash
 dotnet build
 dotnet run
 ```
 
-6. **Set Up GitHub Webhook**
-   - Configure a webhook in your GitHub repository settings
-   - Point it to your running application URL
-   - Use the configured webhook secret
+### 5️. Add GitHub Webhook
 
+| Setting | Value                                |
+| ------- | ------------------------------------ |
+| URL     | `http://your-app-url/webhook/github` |
+| Events  | `Pull Request`                       |
+| Secret  | same as config                       |
 
-## 🔒 Security Considerations
+---
 
--Store sensitive credentials in secure configuration management
-- Use environment variables for production deployments
-- Regularly rotate API keys and tokens
-- Validate webhook signatures
-- Implement rate limiting for API calls
+## 🔐 Security Best Practices
+
+* Store PAT & OpenAI keys in **secure vaults**
+* Use **environment variables** in production
+* Validate GitHub webhook signatures
+* Rotate tokens regularly
+
+---
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+1. Fork repo
+2. Create feature branch
+3. Commit & push
+4. Submit Pull Request 🎉
+
+---
+
+## ⭐ Support the Project
+
+If this project saves you time, consider starring it! ⭐
+
+
+---
