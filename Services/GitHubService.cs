@@ -130,93 +130,132 @@ namespace GitHubPRAssistant.Services
         {
             try
    {
-      // First try: Get content using SHA
-          try
+      // Preferred fallback order: (1) PR head ref, (2) Git blob API, (3) raw.githubusercontent
+
+      // Fetch PR to get head ref
+      PullRequest pr = null;
+      try
       {
-     var fileContent = await _contentPolicy.ExecuteAsync(async () =>
-   await _client.Repository.Content.GetAllContentsByRef(
-                  context.Owner,
-     context.Repo,
-             file.FileName,
-          file.Sha
-     ));
-
-       if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
-   {
-      return fileContent[0].Content ?? "";
-    }
+         pr = await _pullRequestPolicy.ExecuteAsync(async () =>
+   await _client.PullRequest.Get(context.Owner, context.Repo, context.PrNumber));
       }
-        catch (NotFoundException)
-         {
-  _logger.LogDebug("File not found using SHA reference, trying PR head reference");
-       }
-
-           // Second try: Get content from PR head reference
-      try
-                {
-   var pr = await _pullRequestPolicy.ExecuteAsync(async () =>
-         await _client.PullRequest.Get(context.Owner, context.Repo, context.PrNumber));
-
-         var fileContent = await _contentPolicy.ExecuteAsync(async () =>
-         await _client.Repository.Content.GetAllContentsByRef(
-         context.Owner,
-      context.Repo,
-     file.FileName,
-                 pr.Head.Sha
-        ));
-
-      if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
-    {
-                return fileContent[0].Content ?? "";
-   }
-        }
-      catch (NotFoundException)
-                {
-          _logger.LogDebug("File not found using PR head reference, trying raw content");
-      }
-
-                // Third try: Get raw content directly
-      try
-            {
-             var response = await _client.Connection.Get<string>(
-  new Uri($"https://raw.githubusercontent.com/{context.Owner}/{context.Repo}/{file.Sha}/{file.FileName}"),
-          new Dictionary<string, string>(),
-            "application/vnd.github.v3.raw");
-
-                  if (response.Body != null)
-        {
-            return response.Body;
-           }
-      }
-         catch (Exception ex)
-    {
-       _logger.LogDebug(ex, "Failed to fetch raw content");
-     }
-
-      // Fourth try: Get from default branch
-     try
-       {
-             var repo = await _repositoryPolicy.ExecuteAsync(async () =>
-await _client.Repository.Get(context.Owner, context.Repo));
-
- var fileContent = await _contentPolicy.ExecuteAsync(async () =>
-await _client.Repository.Content.GetAllContentsByRef(
-          context.Owner,
-        context.Repo,
-     file.FileName,
-             repo.DefaultBranch
-      ));
-
-          if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
-          {
-    return fileContent[0].Content ?? "";
-              }
-             }
       catch (Exception ex)
-        {
-          _logger.LogDebug(ex, "Failed to fetch content from default branch");
-             }
+      {
+         _logger.LogDebug(ex, "Could not fetch PR object; will continue with context owner/repo");
+      }
+
+      // Determine head ref and head repo owner/name to use (default to context values)
+      var headOwner = context.Owner;
+      var headRepo = context.Repo;
+      var headRef = (string?)null;
+
+      if (pr != null)
+      {
+         headRef = pr.Head?.Sha ?? pr.Head?.Ref;
+         // Note: context.Owner/context.Repo should already reflect the PR head repo from webhook parsing
+      }
+
+      //1) Try PR head ref if available
+      if (!string.IsNullOrEmpty(headRef))
+      {
+         try
+         {
+            _logger.LogDebug("Trying file content from PR head ref: {Owner}/{Repo}@{Ref} path={Path}", headOwner, headRepo, headRef, file.FileName);
+            var fileContent = await _contentPolicy.ExecuteAsync(async () =>
+   await _client.Repository.Content.GetAllContentsByRef(headOwner, headRepo, file.FileName, headRef));
+
+            if (fileContent.Count >0 && fileContent[0].Type == ContentType.File)
+            {
+               return fileContent[0].Content ?? string.Empty;
+            }
          }
+         catch (NotFoundException nf)
+         {
+            _logger.LogDebug(nf, "Not found at PR head ref: {Owner}/{Repo}@{Ref} path={Path}", headOwner, headRepo, headRef, file.FileName);
+         }
+         catch (Exception ex)
+         {
+            _logger.LogWarning(ex, "Error fetching content from PR head ref for {Path}", file.FileName);
+         }
+      }
+
+      //2) If file.Sha looks like a blob SHA (40 hex) try Git blob API
+      if (!string.IsNullOrEmpty(file.Sha) && file.Sha.Length ==40 && System.Text.RegularExpressions.Regex.IsMatch(file.Sha, "^[0-9a-fA-F]{40}$"))
+      {
+         try
+         {
+            _logger.LogDebug("Trying Git blob API for {Owner}/{Repo} blob={Blob} path={Path}", headOwner, headRepo, file.Sha, file.FileName);
+            var blob = await _client.Git.Blob.Get(headOwner, headRepo, file.Sha);
+            if (!string.IsNullOrEmpty(blob.Content))
+            {
+               // Encoding is a StringEnum<EncodingType>; compare its Value to EncodingType.Base64
+               if (blob.Encoding != null && blob.Encoding.Value == EncodingType.Base64)
+               {
+                  var bytes = Convert.FromBase64String(blob.Content);
+                  return System.Text.Encoding.UTF8.GetString(bytes);
+               }
+
+               return blob.Content;
+            }
+         }
+         catch (NotFoundException nf)
+         {
+            _logger.LogDebug(nf, "Blob not found: {Blob}", file.Sha);
+         }
+         catch (Exception ex)
+         {
+            _logger.LogWarning(ex, "Error fetching blob content for {Blob}", file.Sha);
+         }
+      }
+
+      //3) Try raw.githubusercontent using PR head sha if available
+      if (!string.IsNullOrEmpty(headRef))
+      {
+         try
+         {
+            var rawUrl = $"https://raw.githubusercontent.com/{headOwner}/{headRepo}/{headRef}/{file.FileName}";
+            _logger.LogDebug("Trying raw URL: {RawUrl}", rawUrl);
+
+            var response = await _client.Connection.Get<string>(new Uri(rawUrl), new Dictionary<string, string>(), "application/vnd.github.v3.raw");
+            if (response.Body != null)
+            {
+               return response.Body;
+            }
+         }
+         catch (Exception ex)
+         {
+            _logger.LogDebug(ex, "Failed to fetch raw content from raw.githubusercontent");
+         }
+      }
+
+      //4) Fallback: try default branch of repository
+      try
+      {
+         var repoObj = await _repositoryPolicy.ExecuteAsync(async () => await _client.Repository.Get(context.Owner, context.Repo));
+         if (repoObj != null && !string.IsNullOrEmpty(repoObj.DefaultBranch))
+         {
+            try
+            {
+               _logger.LogDebug("Trying default branch {Branch} for {Owner}/{Repo} path={Path}", repoObj.DefaultBranch, context.Owner, context.Repo, file.FileName);
+               var fileContent = await _contentPolicy.ExecuteAsync(async () =>
+   await _client.Repository.Content.GetAllContentsByRef(context.Owner, context.Repo, file.FileName, repoObj.DefaultBranch));
+
+               if (fileContent.Count >0 && fileContent[0].Type == ContentType.File)
+               {
+                  return fileContent[0].Content ?? string.Empty;
+               }
+            }
+            catch (Exception ex)
+            {
+               _logger.LogDebug(ex, "Failed to fetch content from default branch");
+            }
+         }
+      }
+      catch (Exception ex)
+      {
+         _logger.LogDebug(ex, "Failed to fetch repository to check default branch");
+      }
+   }
             catch (Exception ex)
   {
        _logger.LogWarning(ex, "All attempts to fetch content failed for {FileName}", file.FileName);
