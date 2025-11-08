@@ -15,6 +15,8 @@ namespace GitHubPRAssistant.Services
         private readonly IAsyncPolicy<IReadOnlyList<PullRequestFile>> _prFilesPolicy;
         private readonly IAsyncPolicy<IReadOnlyList<RepositoryContent>> _contentPolicy;
         private readonly IAsyncPolicy<IssueComment> _commentPolicy;
+        private readonly IAsyncPolicy<PullRequest> _pullRequestPolicy;
+        private readonly IAsyncPolicy<Repository> _repositoryPolicy;
 
         public GitHubService(IConfiguration config, ILogger<GitHubService> logger, IGitHubClient client)
         {
@@ -39,6 +41,8 @@ namespace GitHubPRAssistant.Services
             _prFilesPolicy = retryPolicy.AsAsyncPolicy<IReadOnlyList<PullRequestFile>>();
             _contentPolicy = retryPolicy.AsAsyncPolicy<IReadOnlyList<RepositoryContent>>();
             _commentPolicy = retryPolicy.AsAsyncPolicy<IssueComment>();
+            _pullRequestPolicy = retryPolicy.AsAsyncPolicy<PullRequest>();
+            _repositoryPolicy = retryPolicy.AsAsyncPolicy<Repository>();
         }
 
         public async Task<PRContext> ParsePrWebHookAsync(JsonElement payload)
@@ -125,30 +129,101 @@ namespace GitHubPRAssistant.Services
         private async Task<string> GetFileContentWithRetryAsync(PRContext context, PullRequestFile file)
         {
             try
-            {
-                var fileContent = await _contentPolicy.ExecuteAsync(async () =>
-                    await _client.Repository.Content.GetAllContentsByRef(
-   context.Owner,
-       context.Repo,
-   file.FileName,
-       file.Sha
+   {
+      // First try: Get content using SHA
+          try
+      {
+     var fileContent = await _contentPolicy.ExecuteAsync(async () =>
+   await _client.Repository.Content.GetAllContentsByRef(
+                  context.Owner,
+     context.Repo,
+             file.FileName,
+          file.Sha
      ));
 
-                if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
-                {
-                    return fileContent[0].Content ?? "";
-                }
-            }
-            catch (NotFoundException)
-            {
-                _logger.LogInformation("File not found in repository: {FileName}", file.FileName);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not fetch content for {FileName}", file.FileName);
-            }
+       if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
+   {
+      return fileContent[0].Content ?? "";
+    }
+      }
+        catch (NotFoundException)
+         {
+  _logger.LogDebug("File not found using SHA reference, trying PR head reference");
+       }
 
-            return "";
+           // Second try: Get content from PR head reference
+      try
+                {
+   var pr = await _pullRequestPolicy.ExecuteAsync(async () =>
+         await _client.PullRequest.Get(context.Owner, context.Repo, context.PrNumber));
+
+         var fileContent = await _contentPolicy.ExecuteAsync(async () =>
+         await _client.Repository.Content.GetAllContentsByRef(
+         context.Owner,
+      context.Repo,
+     file.FileName,
+                 pr.Head.Sha
+        ));
+
+      if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
+    {
+                return fileContent[0].Content ?? "";
+   }
+        }
+      catch (NotFoundException)
+                {
+          _logger.LogDebug("File not found using PR head reference, trying raw content");
+      }
+
+                // Third try: Get raw content directly
+      try
+            {
+             var response = await _client.Connection.Get<string>(
+  new Uri($"https://raw.githubusercontent.com/{context.Owner}/{context.Repo}/{file.Sha}/{file.FileName}"),
+          new Dictionary<string, string>(),
+            "application/vnd.github.v3.raw");
+
+                  if (response.Body != null)
+        {
+            return response.Body;
+           }
+      }
+         catch (Exception ex)
+    {
+       _logger.LogDebug(ex, "Failed to fetch raw content");
+     }
+
+      // Fourth try: Get from default branch
+     try
+       {
+             var repo = await _repositoryPolicy.ExecuteAsync(async () =>
+await _client.Repository.Get(context.Owner, context.Repo));
+
+ var fileContent = await _contentPolicy.ExecuteAsync(async () =>
+await _client.Repository.Content.GetAllContentsByRef(
+          context.Owner,
+        context.Repo,
+     file.FileName,
+             repo.DefaultBranch
+      ));
+
+          if (fileContent.Count > 0 && fileContent[0].Type == ContentType.File)
+          {
+    return fileContent[0].Content ?? "";
+              }
+             }
+      catch (Exception ex)
+        {
+          _logger.LogDebug(ex, "Failed to fetch content from default branch");
+             }
+         }
+            catch (Exception ex)
+  {
+       _logger.LogWarning(ex, "All attempts to fetch content failed for {FileName}", file.FileName);
+ }
+
+            _logger.LogInformation("File not found in repository after all attempts: {FileName}", file.FileName);
+        return "";
         }
 
         public async Task PostPrCommentAsync(PRContext context, string comment)
@@ -197,5 +272,25 @@ namespace GitHubPRAssistant.Services
        ".kt", ".rs", ".sql", ".json", ".yaml", ".yml" };
     return codeExtensions.Any(ext => fileName.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
         }
+
+        private async Task<bool> FileExistsInRef(string owner, string repo, string path, string reference)
+     {
+     try
+            {
+                await _contentPolicy.ExecuteAsync(async () =>
+           await _client.Repository.Content.GetAllContentsByRef(owner, repo, path, reference));
+                return true;
+            }
+            catch (NotFoundException)
+            {
+          return false;
+       }
+      catch (Exception)
+  {
+       return false;
+   }
+        }
+
+      // ... rest of the class implementation ...
     }
 }
