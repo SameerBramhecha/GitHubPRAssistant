@@ -1,6 +1,8 @@
 ﻿using GitHubPRAssistant.Models;
 using LibGit2Sharp;
 using Octokit;
+using Polly;
+using System.Net;
 
 namespace GitHubPRAssistant.Services
 {
@@ -9,6 +11,8 @@ namespace GitHubPRAssistant.Services
         private readonly IGitHubClient _github;
         private readonly ILogger<AutomatedActionsService> _logger;
         private readonly IConfiguration _config;
+        private readonly IAsyncPolicy<CheckRunsResponse> _checkRunPolicy;
+        private readonly IAsyncPolicy<PullRequest> _pullRequestPolicy;
 
         public AutomatedActionsService(
             IGitHubClient gitHubClient, 
@@ -18,6 +22,19 @@ namespace GitHubPRAssistant.Services
             _github = gitHubClient;
             _logger = logger;
             _config = config;
+
+            // Configure retry policies
+            _checkRunPolicy = Policy<CheckRunsResponse>
+                .Handle<RateLimitExceededException>()
+                .Or<ApiException>(ex => ex.StatusCode == (HttpStatusCode)429)
+                .WaitAndRetryAsync(3, retryAttempt => 
+                    TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+
+            _pullRequestPolicy = Policy<PullRequest>
+                .Handle<RateLimitExceededException>()
+                .Or<ApiException>(ex => ex.StatusCode == (HttpStatusCode)429)
+                .WaitAndRetryAsync(3, retryAttempt => 
+                    TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
         }
 
         // Evaluate if PR should be auto-approved
@@ -27,67 +44,80 @@ namespace GitHubPRAssistant.Services
         {
             var criteria = new List<(bool Passed, string Criterion)>();
 
-            // Criterion 1: No critical issues
-            criteria.Add((
-                !reviewResult.HasCriticalIssues,
-                "No critical security or quality issues"
-            ));
+            try
+            {
+                // Criterion 1: No critical issues
+                criteria.Add((
+                    !reviewResult.HasCriticalIssues,
+                    "No critical security or quality issues"
+                ));
 
-            // Criterion 2: Small change size
-            var totalChanges = context.ChangedFiles.Sum(f => f.Added + f.Removed);
-            criteria.Add((
-                totalChanges < 100,
-                $"Small change size ({totalChanges} lines)"
-            ));
+                // Criterion 2: Small change size
+                var totalChanges = context.ChangedFiles.Sum(f => f.Added + f.Removed);
+                criteria.Add((
+                    totalChanges < 100,
+                    $"Small change size ({totalChanges} lines)"
+                ));
 
-            // Criterion 3: Only documentation or config changes
-            var onlyDocsOrConfig = context.ChangedFiles.All(f =>
-                f.Path.EndsWith(".md") ||
-                f.Path.EndsWith(".json") ||
-                f.Path.EndsWith(".yml") ||
-                f.Path.EndsWith(".yaml") ||
-                f.Path.Contains("docs/")
-            );
-            criteria.Add((
-                onlyDocsOrConfig,
-                "Only documentation or configuration changes"
-            ));
+                // Criterion 3: Only documentation or config changes
+                var onlyDocsOrConfig = context.ChangedFiles.All(f =>
+                    f.Path.EndsWith(".md") ||
+                    f.Path.EndsWith(".json") ||
+                    f.Path.EndsWith(".yml") ||
+                    f.Path.EndsWith(".yaml") ||
+                    f.Path.Contains("docs/")
+                );
+                criteria.Add((
+                    onlyDocsOrConfig,
+                    "Only documentation or configuration changes"
+                ));
 
-            // Criterion 4: Tests are included (if code changes)
-            var hasCodeChanges = context.ChangedFiles.Any(f =>
-                f.Path.EndsWith(".cs") || f.Path.EndsWith(".js") || f.Path.EndsWith(".ts")
-            );
-            var hasTestChanges = context.ChangedFiles.Any(f =>
-                f.Path.Contains("test", StringComparison.OrdinalIgnoreCase) ||
-                f.Path.Contains("spec", StringComparison.OrdinalIgnoreCase)
-            );
-            criteria.Add((
-                !hasCodeChanges || hasTestChanges,
-                "Tests included for code changes"
-            ));
+                // Criterion 4: Tests are included (if code changes)
+                var hasCodeChanges = context.ChangedFiles.Any(f =>
+                    f.Path.EndsWith(".cs") || f.Path.EndsWith(".js") || f.Path.EndsWith(".ts")
+                );
+                var hasTestChanges = context.ChangedFiles.Any(f =>
+                    f.Path.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+                    f.Path.Contains("spec", StringComparison.OrdinalIgnoreCase)
+                );
+                criteria.Add((
+                    !hasCodeChanges || hasTestChanges,
+                    "Tests included for code changes"
+                ));
 
-            // Criterion 5: No failed checks
-            var checks = await _github.Check.Run.GetAllForReference(
-                context.Owner,
-                context.Repo,
-                $"refs/pull/{context.PrNumber}/head"
-            );
-            var allChecksPassed = checks.CheckRuns.All(c =>
-                c.Status == CheckStatus.Completed && c.Conclusion == CheckConclusion.Success
-            );
-            criteria.Add((
-                allChecksPassed,
-                "All CI/CD checks passed"
-            ));
+                // Criterion 5: No failed checks with retry logic
+                var checksResponse = await _checkRunPolicy.ExecuteAsync(async () => 
+                    await _github.Check.Run.GetAllForReference(
+                        context.Owner,
+                        context.Repo,
+                        $"refs/pull/{context.PrNumber}/head"
+                    ));
 
-            // Criterion 6: From trusted author (configurable)
-            var trustedAuthors = _config.GetSection("AutoApproval:TrustedAuthors").Get<List<string>>() ?? new();
-            var pr = await _github.PullRequest.Get(context.Owner, context.Repo, context.PrNumber);
-            var isTrustedAuthor = trustedAuthors.Contains(pr.User.Login);
-            criteria.Add((
-                isTrustedAuthor || trustedAuthors.Count == 0,
-                $"Author is trusted: {pr.User.Login}"
-            ));
+                var allChecksPassed = checksResponse.CheckRuns.All(c =>
+                    c.Status == CheckStatus.Completed && c.Conclusion == CheckConclusion.Success
+                );
+                criteria.Add((
+                    allChecksPassed,
+                    "All CI/CD checks passed"
+                ));
+
+                // Criterion 6: From trusted author (configurable) with retry logic
+                var trustedAuthors = _config.GetSection("AutoApproval:TrustedAuthors").Get<List<string>>() ?? new();
+                var pr = await _pullRequestPolicy.ExecuteAsync(async () =>
+                    await _github.PullRequest.Get(context.Owner, context.Repo, context.PrNumber));
+                
+                var isTrustedAuthor = trustedAuthors.Contains(pr.User.Login);
+                criteria.Add((
+                    isTrustedAuthor || trustedAuthors.Count == 0,
+                    $"Author is trusted: {pr.User.Login}"
+                ));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error evaluating auto-approval criteria");
+                // If there's an error evaluating criteria, return false to be safe
+                return (false, "Error evaluating approval criteria: " + ex.Message);
+            }
 
             // All criteria must pass for auto-approval
             var allPassed = criteria.All(c => c.Passed);
