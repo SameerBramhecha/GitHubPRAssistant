@@ -5,12 +5,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>03e37d08-a90d-45ca-86d4-a6e8694c666d</UserSecretsId>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    <DockerfileContext>.</DockerfileContext>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Agents.AI" Version="1.0.0-preview.251104.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.10" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0-rc.2.25502.107" />
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.22.1" />
     <PackageReference Include="Octokit" Version="14.0.0" />
     <PackageReference Include="OpenAI" Version="2.6.0" />
   </ItemGroup>
